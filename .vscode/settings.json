@@ -1,0 +1,8 @@
+{
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "explicit",
+    "source.organizeImports": "explicit",
+    "source.sortMembers": "explicit"
+  },
+  "cmake.sourceDirectory": "C:/Users/marai/InvisibleInk_Mobile/node_modules/expo-av/android"
+}

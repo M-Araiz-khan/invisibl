@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "InvisibleInk_Mobile",
+    "slug": "InvisibleInk_Mobile",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "icon": "./assets/images/IMG_20260516_155115.png",
+    "scheme": "invisibleinkmobile",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "backgroundColor": "#121212",
+        "foregroundImage": "./assets/images/IMG_20260516_155115.png"
+      },
+      "package": "com.araiz.invisibleink",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS",
+        "ACCESS_NETWORK_STATE",
+        "INTERNET"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./assets/images/IMG_20260516_155115.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/IMG_20260516_155115.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
+        }
+      ],
+      "expo-build-properties"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "b052d303-c505-4989-a931-94f7b39ff735"
+      },
+      "router": {}
+    },
+    "owner": "zorean_developers"
+  }
+}
