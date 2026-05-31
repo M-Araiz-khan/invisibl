@@ -1,4 +1,4 @@
-const { db } = require('../config/firebaseAdmin');
+const supabase = require('../config/supabaseclient'); // 👈 Yahan C chota kar diya hai
 const logger = require('../utils/logger');
 
 // Maximum allowed self-destruct time (1 hour)
@@ -21,22 +21,39 @@ exports.startSelfDestructTimer = async (req, res) => {
       });
     }
 
-    // Respond immediately
+    // Respond immediately to the client
     res.status(202).json({ status: 'Scheduled', messageId });
 
-    // Log with optional user info (if protect middleware is used)
-    const initiatedBy = req.user ? `by ${req.user.uid}` : 'by anonymous';
+    // Log with user info (using req.user.id for Supabase)
+    const initiatedBy = req.user ? `by ID: ${req.user.id}` : 'by anonymous';
     logger.info(`Self-destruct scheduled for message ${messageId} in ${timeout}s ${initiatedBy}`);
 
     // Schedule deletion (timer doesn't prevent process exit)
     const timer = setTimeout(async () => {
       try {
-        const msgRef = db.ref(`chats/${chatId}/messages/${messageId}`);
-        const snapshot = await msgRef.once('value');
+        // Step 1: Check if message exists (Optional, but good for logging)
+        const { data: message, error: fetchError } = await supabase
+          .from('messages')
+          .select('id')
+          .eq('id', messageId)
+          .eq('chat_id', chatId)
+          .single(); // Assuming messageId is primary key
 
-        if (snapshot.exists()) {
-          await msgRef.remove();
-          logger.info(`POOF! 💨 Message ${messageId} destroyed.`);
+        if (fetchError && fetchError.code !== 'PGRST116') {
+          throw fetchError; // Ignore "Row not found" error for logging later
+        }
+
+        if (message) {
+          // Step 2: Delete the message from Supabase Table
+          const { error: deleteError } = await supabase
+            .from('messages')
+            .delete()
+            .eq('id', messageId)
+            .eq('chat_id', chatId);
+
+          if (deleteError) throw deleteError;
+          
+          logger.info(`POOF! 💨 Message ${messageId} destroyed from Supabase.`);
         } else {
           logger.warn(`Message ${messageId} already gone before destruct timer fired.`);
         }

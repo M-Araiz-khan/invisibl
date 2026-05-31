@@ -1,0 +1,32 @@
+diff --git a/node_modules/@zegocloud/zego-uikit-prebuilt-call-rn/lib/module/call_invitation/pages/ZegoCallInvitationRoom.js b/node_modules/@zegocloud/zego-uikit-prebuilt-call-rn/lib/module/call_invitation/pages/ZegoCallInvitationRoom.js
+index 52ad923..904fa79 100644
+--- a/node_modules/@zegocloud/zego-uikit-prebuilt-call-rn/lib/module/call_invitation/pages/ZegoCallInvitationRoom.js
++++ b/node_modules/@zegocloud/zego-uikit-prebuilt-call-rn/lib/module/call_invitation/pages/ZegoCallInvitationRoom.js
+@@ -1,12 +1,12 @@
+-import React, { useEffect } from 'react';
+-import { AppState } from 'react-native';
+ import { useNavigation } from '@react-navigation/native';
+ import ZegoUIKit from '@zegocloud/zego-uikit-rn';
++import React, { useEffect } from 'react';
++import { AppState } from 'react-native';
+ import ZegoUIKitPrebuiltCall from '../../call';
+ import MinimizingHelper from "../../call/services/minimizing_helper";
+ import PrebuiltHelper from "../../call/services/prebuilt_helper";
+ import ZegoUIKitPrebuiltCallService from '../../services';
+-import { ONE_ON_ONE_VIDEO_CALL_CONFIG, ONE_ON_ONE_VOICE_CALL_CONFIG, GROUP_VIDEO_CALL_CONFIG, GROUP_VOICE_CALL_CONFIG, ZegoCallEndReason } from '../../services/defines';
++import { GROUP_VIDEO_CALL_CONFIG, GROUP_VOICE_CALL_CONFIG, ONE_ON_ONE_VIDEO_CALL_CONFIG, ONE_ON_ONE_VOICE_CALL_CONFIG, ZegoCallEndReason } from '../../services/defines';
+ import TimingHelper from '../../services/timing_helper';
+ import { zloginfo } from '../../utils/logger';
+ import BellManage from '../services/bell';
+@@ -173,8 +173,9 @@ export default function ZegoUIKitPrebuiltCallInCallScreen(props) {
+     HangupHelper.getInstance().onAutoJump(callbackID, () => {
+       zloginfo('########onAutoJump#########', origin, invitees.length);
+       hangUpHandle();
+-      navigation.goBack();
+-      origin === 'ZegoUIKitPrebuiltCallWaitingScreen' && invitees.length === 1 && navigation.goBack();
++      // Yahan optional chaining (?) laga di hai taake agar navigation na ho toh crash na ho
++      navigation?.goBack?.(); 
++      origin === 'ZegoUIKitPrebuiltCallWaitingScreen' && invitees.length === 1 && navigation?.goBack?.();
+     });
+     const unsubscribe1 = navigation.addListener('blur', () => {
+       zloginfo('[Navigation] ZegoUIKitPrebuiltCallInCallScreen, blur');

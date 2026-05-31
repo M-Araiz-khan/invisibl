@@ -7,6 +7,7 @@ const logger = require('./src/utils/logger');
 const authRoutes = require('./src/routes/authRoutes');
 const messageRoutes = require('./src/routes/messageRoutes');
 const profileRoutes = require('./src/routes/profileRoutes');
+//const userRoutes = require('./src/routes/userRoutes'); // ✅ Added just in case you need it
 
 const app = express();
 
@@ -23,6 +24,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/profile', profileRoutes);
+//app.use('/api/user', userRoutes); // ✅ Uncomment if using userRoutes
 
 // ==========================================
 // ROOT & HEALTH CHECK
@@ -34,7 +36,7 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'success',
-    message: 'Invisible Ink Server is running securely.',
+    message: 'Invisible Ink Server is running securely with Supabase.',
     timestamp: new Date().toISOString(),
   });
 });
@@ -57,13 +59,14 @@ app.use((err, req, res, next) => {
 // SERVER STARTUP
 // ==========================================
 const PORT = process.env.PORT || 3000;
-const DB_URL = process.env.DB_URL;
+// ✅ FIXED: Check for Supabase URL instead of the old DB_URL
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 
 app.listen(PORT, () => {
   logger.info(`Server running on http://localhost:${PORT}`);
-  if (DB_URL) {
-    logger.info(`Linked to Database: ${DB_URL}`);
+  if (SUPABASE_URL) {
+    logger.info(`Linked to Supabase Database: ${SUPABASE_URL}`);
   } else {
-    logger.warn('⚠️ DB_URL missing in .env file!');
+    logger.warn('⚠️ EXPO_PUBLIC_SUPABASE_URL missing in .env file!');
   }
 });

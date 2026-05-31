@@ -4,11 +4,12 @@ import {
   deleteAsync,
   documentDirectory,
   downloadAsync,
-  getInfoAsync,
-  makeDirectoryAsync,
+  getInfoAsync, // ✅ Sahi API for checking files/directories
+  makeDirectoryAsync
 } from 'expo-file-system';
-import { ref as dbRef, remove } from 'firebase/database';
-import { database } from '../config/firebaseClient';
+
+// ✅ SUPABASE IMPORT
+import { supabase } from '../config/supabaseclient';
 
 // ── Storage keys ──────────────────────────────────────
 const CONTACTS_KEY = '@invisible_contacts';
@@ -20,11 +21,13 @@ const SECURITY_ANSWER_KEY = 'security_answer';
 // ── Media directory helpers ────────────────────────────
 const getMediaDir = () => `${documentDirectory}media/`;
 
+// ✅ PRO FIX: getInfoAsync se check kiya
 const ensureMediaDir = async () => {
-  const dir = getMediaDir();
-  const dirInfo = await getInfoAsync(dir);
+  const dirPath = getMediaDir();
+  const dirInfo = await getInfoAsync(dirPath);
+  
   if (!dirInfo.exists) {
-    await makeDirectoryAsync(dir, { intermediates: true });
+    await makeDirectoryAsync(dirPath, { intermediates: true });
   }
 };
 
@@ -46,8 +49,12 @@ export const downloadAndCacheMedia = async (remoteUrl, fileName) => {
   try {
     await ensureMediaDir();
     const localUri = getMediaDir() + fileName;
+    
+    // ✅ PRO FIX: getInfoAsync se check kiya
     const fileInfo = await getInfoAsync(localUri);
-    if (fileInfo.exists) return localUri;               // already cached
+    
+    if (fileInfo.exists) return localUri; // already cached
+    
     const { uri } = await downloadAsync(remoteUrl, localUri);
     return uri;
   } catch (error) {
@@ -59,7 +66,10 @@ export const downloadAndCacheMedia = async (remoteUrl, fileName) => {
 export const deleteLocalMedia = async (fileName) => {
   try {
     const uri = getMediaDir() + fileName;
+    
+    // ✅ PRO FIX: getInfoAsync se check kiya
     const fileInfo = await getInfoAsync(uri);
+    
     if (fileInfo.exists) {
       await deleteAsync(uri, { idempotent: true });
     }
@@ -135,11 +145,24 @@ export const deleteContacts = async (contactIdsArray) => {
 // ── Messages (JSON only – media paths are stored inside) ─
 export const getMessages = async (contactId) => {
   try {
-    const data = await AsyncStorage.getItem(MESSAGES_PREFIX + contactId);
-    return data ? JSON.parse(data) : [];
+    // 1. Supabase se fresh data fetch karein
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('chat_id', contactId)
+      .order('timestamp', { ascending: true });
+
+    if (error) throw error;
+
+    // 2. Local storage ko update kar dein (Offline support ke liye)
+    await AsyncStorage.setItem(MESSAGES_PREFIX + contactId, JSON.stringify(data));
+    
+    return data;
   } catch (err) {
-    console.log(err);
-    return [];
+    console.error("Supabase fetch failed, loading offline...", err);
+    // Agar internet nahi hai, toh purana local data return karein
+    const localData = await AsyncStorage.getItem(MESSAGES_PREFIX + contactId);
+    return localData ? JSON.parse(localData) : [];
   }
 };
 
@@ -195,9 +218,11 @@ export const startSelfDestructTimer = (chatId, messageId, timeoutSeconds) => {
 
   setTimeout(async () => {
     try {
-      // 1. Remove from Firebase
-      const messageRef = dbRef(database, `chats/${chatId}/messages/${messageId}`);
-      await remove(messageRef);
+      // 1. Remove from Supabase DB
+      await supabase
+        .from('messages')
+        .delete()
+        .match({ id: messageId });
 
       // 2. Remove from local storage
       const localData = await AsyncStorage.getItem(MESSAGES_PREFIX + chatId);

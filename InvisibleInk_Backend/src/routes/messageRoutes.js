@@ -3,7 +3,7 @@ const router = express.Router();
 
 // Controllers & Middleware
 const messageController = require('../controllers/messageController');
-const requireAuth = require('../middleware/requireAuth');  
+const requireAuth = require('../middlewares/requireAuth');  
 
 /**
  * Async wrapper to catch unhandled promise rejections.
@@ -15,8 +15,8 @@ const asyncHandler = (fn) => (req, res, next) =>
 // MESSAGE ROUTES
 // ==========================================
 
-// Route:   POST /api/messages/timer
-// Desc:    Starts a self-destruct timer for a specific message
+// Route:   POST /timer
+// Desc:    Starts a self-destruct timer for a specific message (Supabase Database)
 // Access:  Private (Requires Bearer Token)
 router.post('/timer', requireAuth, asyncHandler(messageController.startSelfDestructTimer));
 

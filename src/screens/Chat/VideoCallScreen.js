@@ -8,8 +8,10 @@ import ZegoUIKitPrebuiltCall, {
 } from '@zegocloud/zego-uikit-prebuilt-call-rn';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-// 🌟 Import Path (Make sure this matches your file structure)
+
+// 🌟 Import Paths
 import { ZEGO_APP_ID, ZEGO_APP_SIGN } from './videocall';
+import { supabase } from '../../config/supabaseclient';// Supabase import yahan add ho gaya hai
 
 export default function VideoCallScreen({ route, navigation }) {
   if (!route?.params?.contact || !route?.params?.myProfile) {
@@ -56,9 +58,9 @@ export default function VideoCallScreen({ route, navigation }) {
           ...baseConfig,
           
           // 1. ⚙️ Audio/Video Initial States
-          turnOnCameraWhenJoining: isVideo, // Audio call me camera off hoga
+          turnOnCameraWhenJoining: isVideo,
           turnOnMicrophoneWhenJoining: true,
-          useSpeakerWhenJoining: isVideo, // Audio call me earpiece, Video me speaker
+          useSpeakerWhenJoining: isVideo,
 
           // 2. 🎨 Layout Configuration
           layout: {
@@ -76,10 +78,9 @@ export default function VideoCallScreen({ route, navigation }) {
           audioVideoViewConfig: {
             showMicrophoneStateOnView: true,
             showCameraStateOnView: true,
-            showUserNameOnView: false, // Label hide kar diya
-            showSoundWavesInAudioMode: false, // Sound waves hide kar di
+            showUserNameOnView: false,
+            showSoundWavesInAudioMode: false,
             
-            // Custom Component over the video/audio
             foregroundBuilder: ({ userInfo }) => (
               <View style={styles.customForeground}>
                 <Text style={styles.foregroundText}>
@@ -99,8 +100,6 @@ export default function VideoCallScreen({ route, navigation }) {
               ZegoMenuBarButtonName.switchAudioOutputButton,
               ZegoMenuBarButtonName.switchCameraButton,
             ],
-            // Agar extra custom buttons chahiye hon to yahan dalte hain:
-            // extendButtons: [ <MyCustomButton /> ]
           },
 
           // 5. 🛑 Hangup Confirmation Dialog
@@ -111,9 +110,23 @@ export default function VideoCallScreen({ route, navigation }) {
             confirmButtonName: "End Call"
           },
 
-          // 6. 📞 End Call Handlers
-          onCallEnd: (callID, reason, duration) => {
-            console.log('Call Ended:', reason);
+          // 6. 📞 End Call Handlers (Ab yeh sahi jagah par hain)
+          onCallEnd: async (callID, reason, duration) => {
+            console.log('Call Ended:', reason, 'Duration:', duration);
+            
+            try {
+              await supabase.from('messages').insert([
+                {
+                  chat_id: route.params?.contact?.id,
+                  sender: myId,
+                  text: `📞 ${isVideo ? 'Video' : 'Voice'} Call Ended (${duration}s)`,
+                  timestamp: Date.now(),
+                }
+              ]);
+            } catch (error) {
+              console.log("Call log save error:", error);
+            }
+
             navigation.goBack();
           },
           onHangUp: () => navigation.goBack(),
@@ -128,7 +141,6 @@ const styles = StyleSheet.create({
   center: { justifyContent: 'center', alignItems: 'center', padding: 20 },
   errorText: { color: '#ff4444', fontSize: 16, textAlign: 'center' },
   
-  // Custom Foreground Style
   customForeground: {
     position: 'absolute',
     bottom: 10,

@@ -21,6 +21,9 @@ import {
   saveSecurityAnswer,
 } from '../../utils/storage';
 
+// ✅ PRO FIX: Supabase Import Added
+import { supabase } from '../../config/supabaseclient';
+
 export default function SettingsScreen({ navigation }) {
   const [profileId, setProfileId] = useState('');
   const [name, setName] = useState('Loading...');
@@ -33,32 +36,61 @@ export default function SettingsScreen({ navigation }) {
   const [isQRModalVisible, setIsQRModalVisible] = useState(false);
 
   // Load profile and security answer
+  const loadProfile = async () => {
+    const myData = await getMyProfile();
+    if (myData) {
+      setProfileId(myData.id);
+      setName(myData.name || 'Agent 47');
+      setPhone(myData.phone || ''); 
+      setBio(myData.bio || "I'm feeling secure...");
+    }
+    const answer = await getSecurityAnswer();
+    setSecurityAnswer(answer);
+  };
+
   useEffect(() => {
-    const loadProfile = async () => {
-      const myData = await getMyProfile();
-      if (myData) {
-        setProfileId(myData.id);
-        setName(myData.name || 'Agent 47');
-        setPhone(myData.phone || 'No phone added');
-        setBio(myData.bio || "I'm feeling secure...");
-      }
-      const answer = await getSecurityAnswer();
-      setSecurityAnswer(answer);
-    };
     loadProfile();
   }, []);
 
-  // Save profile changes
+  // ✅ PRO FIX: Save profile to both Local Storage AND Supabase Database
   const handleSaveProfile = async () => {
     if (!name.trim()) {
       Alert.alert('Error', 'Display Name is required!');
       return;
     }
+    
+    // 1. Save Locally (AsyncStorage)
     const updatedProfile = { id: profileId, name, phone, bio };
     await saveMyProfile(updatedProfile);
     await saveSecurityAnswer(securityAnswer);
+    
+    // 2. Save to Supabase Cloud
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .upsert([
+          {
+            id: profileId,
+            name: name,
+            phone: phone || null,
+            bio: bio || null,
+          }
+        ], { onConflict: 'id' }); // Upsert updates if ID exists, creates if new
+
+      if (error) {
+        console.error("Supabase Sync Error:", error);
+        Alert.alert('Warning', 'Profile saved locally but failed to sync to cloud.');
+        return;
+      }
+    } catch (err) {
+      console.error("Supabase Request Failed:", err);
+    }
+    
+    // Re-load profile to ensure UI (and QR Code) reflects the changes instantly
+    await loadProfile(); 
+    
     setIsEditModalVisible(false);
-    Alert.alert('Success', 'Profile updated securely!');
+    Alert.alert('Success', 'Profile updated & synced to Cloud securely!');
   };
 
   // Share invite
@@ -87,6 +119,12 @@ export default function SettingsScreen({ navigation }) {
     </TouchableOpacity>
   );
 
+  const qrPayload = JSON.stringify({ 
+    app: 'InvisibleInk', 
+    id: profileId, 
+    name: name 
+  });
+
   return (
     <View style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
@@ -104,7 +142,7 @@ export default function SettingsScreen({ navigation }) {
             </View>
             <View style={styles.profileInfo}>
               <Text style={styles.profileName}>{name}</Text>
-              <Text style={styles.profilePhone}>{phone}</Text>
+              <Text style={styles.profilePhone}>{phone || 'No phone added'}</Text>
               <View style={styles.bioContainer}>
                 <Ionicons name="happy-outline" size={14} color="#00FFCC" />
                 <Text style={styles.profileBio} numberOfLines={1}>
@@ -180,12 +218,16 @@ export default function SettingsScreen({ navigation }) {
           <View style={styles.qrModalContent}>
             <Text style={styles.qrTitle}>My Identity QR</Text>
             <View style={styles.qrContainer}>
-              <QRCode
-                value={JSON.stringify({ id: profileId, name, phone })}
-                size={240}
-                color="#00FFCC"
-                backgroundColor="#1E1E1E"
-              />
+              {profileId ? (
+                <QRCode
+                  value={qrPayload}
+                  size={240}
+                  color="#00FFCC"
+                  backgroundColor="#1E1E1E"
+                />
+              ) : (
+                <Text style={{ color: '#FFF' }}>Loading QR...</Text>
+              )}
             </View>
             <Text style={styles.qrSubtitle}>
               Ask your friend to scan this code to start a secret chat.
@@ -232,6 +274,8 @@ export default function SettingsScreen({ navigation }) {
                     keyboardType="phone-pad"
                     value={phone}
                     onChangeText={setPhone}
+                    placeholder="Optional"
+                    placeholderTextColor="rgba(255,255,255,0.3)"
                   />
                 </View>
               </View>
@@ -281,216 +325,41 @@ export default function SettingsScreen({ navigation }) {
   );
 }
 
-// ── Styles ──────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-  },
-  // Profile Header
-  profileHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 30,
-    paddingBottom: 15,
-  },
-  profileGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,255,204,0.05)',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(0,255,204,0.15)',
-  },
-  avatar: {
-    width: 65,
-    height: 65,
-    borderRadius: 32.5,
-    backgroundColor: 'rgba(0,255,204,0.2)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 15,
-  },
-  avatarText: {
-    fontSize: 28,
-    color: '#00FFCC',
-    fontWeight: 'bold',
-  },
-  profileInfo: {
-    flex: 1,
-  },
-  profileName: {
-    color: '#FFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  profilePhone: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 14,
-    marginTop: 2,
-  },
-  bioContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  profileBio: {
-    color: '#00FFCC',
-    fontSize: 13,
-    marginLeft: 5,
-  },
-  qrIcon: {
-    padding: 8,
-    backgroundColor: 'rgba(0,255,204,0.1)',
-    borderRadius: 12,
-  },
-  // Settings list
-  settingsList: {
-    paddingHorizontal: 20,
-    marginTop: 10,
-  },
-  optionContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.05)',
-  },
-  optionIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  optionTextContainer: {
-    flex: 1,
-  },
-  optionTitle: {
-    color: '#FFF',
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  optionSubtitle: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  // Modals
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  qrModalContent: {
-    backgroundColor: '#1E1E1E',
-    padding: 30,
-    borderRadius: 20,
-    alignItems: 'center',
-    width: '85%',
-  },
-  qrTitle: {
-    color: '#FFF',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 20,
-  },
-  qrContainer: {
-    padding: 15,
-    backgroundColor: '#1E1E1E',
-    borderRadius: 15,
-    borderWidth: 2,
-    borderColor: '#00FFCC',
-  },
-  qrSubtitle: {
-    color: 'rgba(255,255,255,0.6)',
-    textAlign: 'center',
-    marginTop: 20,
-    fontSize: 13,
-    paddingHorizontal: 10,
-  },
-  closeButton: {
-    marginTop: 25,
-    backgroundColor: '#00FFCC',
-    paddingVertical: 12,
-    paddingHorizontal: 40,
-    borderRadius: 10,
-  },
-  closeButtonText: {
-    color: '#121212',
-    fontWeight: 'bold',
-  },
-  // Edit modal
-  editModalContent: {
-    backgroundColor: '#1E1E1E',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    width: '100%',
-    position: 'absolute',
-    bottom: 0,
-    maxHeight: '80%',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#2A2A2A',
-  },
-  modalTitle: {
-    color: '#FFF',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  formContainer: {
-    padding: 20,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    color: 'rgba(255,255,255,0.7)',
-    fontSize: 14,
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#121212',
-    borderRadius: 12,
-    paddingHorizontal: 15,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-  },
-  inputIcon: {
-    marginRight: 10,
-  },
-  input: {
-    flex: 1,
-    color: '#FFF',
-    paddingVertical: 15,
-    fontSize: 16,
-  },
-  saveButton: {
-    backgroundColor: '#00FFCC',
-    borderRadius: 12,
-    paddingVertical: 15,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  saveButtonText: {
-    color: '#121212',
-    fontWeight: 'bold',
-    fontSize: 16,
-  },
-  versionText: {
-    color: 'rgba(255,255,255,0.2)',
-    textAlign: 'center',
-    marginTop: 30,
-    fontSize: 12,
-  },
+  container: { flex: 1, backgroundColor: '#121212' },
+  profileHeader: { paddingHorizontal: 20, paddingTop: 30, paddingBottom: 15 },
+  profileGradient: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,255,204,0.05)', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: 'rgba(0,255,204,0.15)' },
+  avatar: { width: 65, height: 65, borderRadius: 32.5, backgroundColor: 'rgba(0,255,204,0.2)', justifyContent: 'center', alignItems: 'center', marginRight: 15 },
+  avatarText: { fontSize: 28, color: '#00FFCC', fontWeight: 'bold' },
+  profileInfo: { flex: 1 },
+  profileName: { color: '#FFF', fontSize: 20, fontWeight: 'bold' },
+  profilePhone: { color: 'rgba(255,255,255,0.5)', fontSize: 14, marginTop: 2 },
+  bioContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  profileBio: { color: '#00FFCC', fontSize: 13, marginLeft: 5 },
+  qrIcon: { padding: 8, backgroundColor: 'rgba(0,255,204,0.1)', borderRadius: 12 },
+  settingsList: { paddingHorizontal: 20, marginTop: 10 },
+  optionContainer: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  optionIconContainer: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
+  optionTextContainer: { flex: 1 },
+  optionTitle: { color: '#FFF', fontSize: 16, fontWeight: '500' },
+  optionSubtitle: { color: 'rgba(255,255,255,0.4)', fontSize: 13, marginTop: 2 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.85)', justifyContent: 'center', alignItems: 'center' },
+  qrModalContent: { backgroundColor: '#1E1E1E', padding: 30, borderRadius: 20, alignItems: 'center', width: '85%' },
+  qrTitle: { color: '#FFF', fontSize: 20, fontWeight: 'bold', marginBottom: 20 },
+  qrContainer: { padding: 15, backgroundColor: '#1E1E1E', borderRadius: 15, borderWidth: 2, borderColor: '#00FFCC' },
+  qrSubtitle: { color: 'rgba(255,255,255,0.6)', textAlign: 'center', marginTop: 20, fontSize: 13, paddingHorizontal: 10 },
+  closeButton: { marginTop: 25, backgroundColor: '#00FFCC', paddingVertical: 12, paddingHorizontal: 40, borderRadius: 10 },
+  closeButtonText: { color: '#121212', fontWeight: 'bold' },
+  editModalContent: { backgroundColor: '#1E1E1E', borderTopLeftRadius: 20, borderTopRightRadius: 20, width: '100%', position: 'absolute', bottom: 0, maxHeight: '80%' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, borderBottomWidth: 1, borderBottomColor: '#2A2A2A' },
+  modalTitle: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
+  formContainer: { padding: 20 },
+  inputGroup: { marginBottom: 20 },
+  label: { color: 'rgba(255,255,255,0.7)', fontSize: 14, marginBottom: 8, fontWeight: '500' },
+  inputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#121212', borderRadius: 12, paddingHorizontal: 15, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
+  inputIcon: { marginRight: 10 },
+  input: { flex: 1, color: '#FFF', paddingVertical: 15, fontSize: 16 },
+  saveButton: { backgroundColor: '#00FFCC', borderRadius: 12, paddingVertical: 15, alignItems: 'center', marginTop: 10 },
+  saveButtonText: { color: '#121212', fontWeight: 'bold', fontSize: 16 },
+  versionText: { color: 'rgba(255,255,255,0.2)', textAlign: 'center', marginTop: 30, fontSize: 12 },
 });

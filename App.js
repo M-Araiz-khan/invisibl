@@ -6,12 +6,15 @@ import ZegoUIKitPrebuiltCallService, {
   ZegoViewPosition
 } from '@zegocloud/zego-uikit-prebuilt-call-rn';
 import { useEffect } from 'react';
-import { Text, View } from 'react-native';
+import { Platform, Text, View } from 'react-native';
 import * as ZIM from 'zego-zim-react-native';
 import * as ZPNs from 'zego-zpns-react-native';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ZEGO_APP_ID, ZEGO_APP_SIGN } from './src/screens/Chat/videocall';
 import { getMyProfile } from './src/utils/storage';
+
+// ✅ کریش روکنے والی لائن
+global.Platform = Platform;
 
 // 🌟 Global promise – resolves when Zego is ready
 let resolveZegoReady;
@@ -101,7 +104,7 @@ export default function App() {
             }
           );
           console.log("✅ Zego Background Service Started!");
-          resolveZegoReady(true);   // <-- signal that Zego is ready
+          resolveZegoReady(true);
         } else {
           console.warn("Profile not found, Zego not initialised");
         }
@@ -117,5 +120,8 @@ export default function App() {
     };
   }, []);
 
-  return <AppNavigator />;
+  return (
+    // ✅ یہاں سے ڈائیلاگ ہٹا دیا گیا ہے
+    <AppNavigator />
+  );
 }

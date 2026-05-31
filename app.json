@@ -2,7 +2,7 @@
   "expo": {
     "name": "InvisibleInk_Mobile",
     "slug": "InvisibleInk_Mobile",
-    "version": "1.0.1",
+    "version": "1.0",
     "orientation": "portrait",
     "icon": "./assets/images/IMG_20260516_155115.png",
     "scheme": "invisibleinkmobile",
@@ -19,16 +19,25 @@
         "RECORD_AUDIO",
         "MODIFY_AUDIO_SETTINGS",
         "ACCESS_NETWORK_STATE",
-        "INTERNET"
+        "INTERNET",
+        "ACCESS_WIFI_STATE",
+        "WAKE_LOCK",
+        "BLUETOOTH",
+        "VIBRATE",
+        "READ_PHONE_STATE",
+        "SYSTEM_ALERT_WINDOW",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_CAMERA",
+        "FOREGROUND_SERVICE_MICROPHONE",
+        "FOREGROUND_SERVICE_PHONE_CALL",
+        "USE_FULL_SCREEN_INTENT"
       ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "output": "static",
       "favicon": "./assets/images/IMG_20260516_155115.png"
     },
     "plugins": [
-      "expo-router",
       [
         "expo-splash-screen",
         {
@@ -41,18 +50,28 @@
           }
         }
       ],
-      "expo-build-properties"
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "2.1.20",
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "minSdkVersion": 24,
+            "enableHermes": false,
+            "enableProguardInReleaseBuilds": false,
+            "enableMinifyInReleaseBuilds": false
+          }
+        }
+      ]
     ],
     "experiments": {
-      "typedRoutes": true,
       "reactCompiler": true
     },
     "extra": {
       "eas": {
-        "projectId": "b052d303-c505-4989-a931-94f7b39ff735"
-      },
-      "router": {}
-    },
-    "owner": "zorean_developers"
+        "projectId": "e0ed5a45-9c66-4036-819e-4d331b90fb3f"
+      }
+    }
   }
 }

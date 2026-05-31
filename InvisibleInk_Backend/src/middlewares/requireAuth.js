@@ -1,4 +1,5 @@
-const { auth } = require('../config/firebaseAdmin'); // ✅ FIXED: Directly import auth
+// const { auth } = require('../config/firebaseAdmin'); // Isko nikal diya
+const supabase = require('../config/supabaseclient'); // ✅ FIXED: Import Supabase client
 const logger = require('../utils/logger');
 
 const requireAuth = async (req, res, next) => {
@@ -17,19 +18,29 @@ const requireAuth = async (req, res, next) => {
       return res.status(401).json({ error: 'Unauthorized. No token provided.' });
     }
 
-    // Verify the token (✅ FIXED: Using auth instance directly)
-    const decodedToken = await auth.verifyIdToken(token);
-    req.user = decodedToken;
+    // Verify the token (✅ FIXED: Using Supabase auth.getUser)
+    const { data, error } = await supabase.auth.getUser(token);
+
+    // Agar error aaye ya user data null ho
+    if (error || !data?.user) {
+      throw error || new Error('User not found in Supabase');
+    }
+
+    // Supabase ka decoded user object req.user mein daal diya
+    req.user = data.user;
     next();
   } catch (error) {
+    const errorMessage = (error.message || '').toLowerCase();
+
     // Distinguish between known auth errors and unexpected ones
-    if (error.code === 'auth/id-token-expired') {
+    // Supabase token expire hone par message mein 'expired' return karta hai
+    if (errorMessage.includes('expired')) {
       logger.warn('Expired token used');
       return res.status(401).json({ error: 'Unauthorized. Token expired.' }); // Usually 401 is better for expired auth
     }
 
-    if (error.code?.startsWith('auth/')) {
-      // Any other Firebase Auth error (e.g., invalid token, revoked token)
+    // Any other Supabase Auth error (e.g., AuthApiError, invalid token, signature failed)
+    if (error.name === 'AuthApiError' || errorMessage.includes('invalid') || errorMessage.includes('jwt')) {
       logger.warn('Invalid token attempt', { message: error.message });
       return res.status(403).json({ error: 'Forbidden. Invalid token.' });
     }

@@ -1,6 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { onValue, ref, remove } from 'firebase/database';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -13,7 +12,8 @@ import {
   View,
 } from 'react-native';
 
-import { database } from '../../config/firebaseClient';
+// ✅ SUPABASE IMPORT (Firebase hata diya gaya hai)
+import { supabase } from '../../config/supabaseclient';
 import { useShake } from '../../hooks/useShake';
 import { deleteContacts, getContacts, getMyProfile } from '../../utils/storage';
 
@@ -21,7 +21,7 @@ export default function ChatListScreen({ navigation }) {
   // --- STATES ---
   const [myProfile, setMyProfile] = useState(null);
   const [localContacts, setLocalContacts] = useState([]);
-  const [firebaseChats, setFirebaseChats] = useState({});
+  const [supabaseChats, setSupabaseChats] = useState({}); // 🔥 FirebaseChats ki jagah SupabaseChats
   const [searchQuery, setSearchQuery] = useState('');
   const [menuVisible, setMenuVisible] = useState(false);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -50,21 +50,61 @@ export default function ChatListScreen({ navigation }) {
     }, [loadInitData])
   );
 
-  // --- REAL-TIME FIREBASE LISTENER ---
+  // --- REAL-TIME SUPABASE LISTENER ---
   useEffect(() => {
     if (!myProfile?.id) return;
-    const recentChatsRef = ref(database, `users/${myProfile.id}/recentChats`);
 
-    const unsubscribe = onValue(recentChatsRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        setFirebaseChats(data);
-      } else {
-        setFirebaseChats({});
+    // Pehle initial recent chats load karein (Agar Supabase mein recent_chats table hai)
+    const fetchInitialChats = async () => {
+      const { data, error } = await supabase
+        .from('recent_chats') // ⚠️ NOTE: Make sure Supabase mein 'recent_chats' table ho!
+        .select('*')
+        .eq('user_id', myProfile.id);
+        
+      if (!error && data) {
+        const chatsObj = {};
+        data.forEach(chat => {
+          // Assuming structure: { contact_id: '123', contact_name: 'John', last_message: 'Hi', unread: true, timestamp: '...' }
+          chatsObj[chat.contact_id] = {
+            contactName: chat.contact_name,
+            lastMessage: chat.last_message,
+            unread: chat.unread,
+            timestamp: new Date(chat.timestamp).getTime()
+          };
+        });
+        setSupabaseChats(chatsObj);
       }
-    });
+    };
 
-    return () => unsubscribe();
+    fetchInitialChats();
+
+    // Phir Realtime updates listen karein
+    const channel = supabase
+      .channel('recent_chats_changes')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'recent_chats', filter: `user_id=eq.${myProfile.id}` }, 
+        (payload) => {
+          // Update chat list on insert, update, or delete
+          setSupabaseChats(prev => {
+            const newChats = { ...prev };
+            if (payload.eventType === 'DELETE') {
+               delete newChats[payload.old.contact_id];
+            } else {
+               newChats[payload.new.contact_id] = {
+                  contactName: payload.new.contact_name,
+                  lastMessage: payload.new.last_message,
+                  unread: payload.new.unread,
+                  timestamp: new Date(payload.new.timestamp).getTime()
+               };
+            }
+            return newChats;
+          });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [myProfile?.id]);
 
   // --- SMART MERGE LOGIC ---
@@ -75,12 +115,12 @@ export default function ChatListScreen({ navigation }) {
       map.set(c.id, { ...c, isLocal: true, id: c.id, name: c.name });
     });
 
-    Object.keys(firebaseChats).forEach(key => {
-      const fbChat = firebaseChats[key];
+    Object.keys(supabaseChats).forEach(key => {
+      const sbChat = supabaseChats[key];
       if (map.has(key)) {
-        map.set(key, { ...map.get(key), ...fbChat, id: key });
+        map.set(key, { ...map.get(key), ...sbChat, id: key });
       } else {
-        map.set(key, { ...fbChat, id: key, name: fbChat.contactName });
+        map.set(key, { ...sbChat, id: key, name: sbChat.contactName });
       }
     });
 
@@ -89,7 +129,7 @@ export default function ChatListScreen({ navigation }) {
       const timeB = b.timestamp || 0;
       return timeB - timeA;
     });
-  }, [localContacts, firebaseChats]);
+  }, [localContacts, supabaseChats]);
 
   // --- LOGIC FUNCTIONS ---
   const toggleSelection = (id) => {
@@ -109,12 +149,18 @@ export default function ChatListScreen({ navigation }) {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
+            // Local storage se delete
             await deleteContacts(selectedIds);
+            
+            // Supabase se delete (PostgreSQL Query)
             if (myProfile?.id) {
-              selectedIds.forEach(id => {
-                remove(ref(database, `users/${myProfile.id}/recentChats/${id}`)).catch(()=>{});
-              });
+              await supabase
+                .from('recent_chats')
+                .delete()
+                .eq('user_id', myProfile.id)
+                .in('contact_id', selectedIds);
             }
+            
             setIsSelectionMode(false);
             setSelectedIds([]);
             loadInitData();
@@ -185,12 +231,17 @@ export default function ChatListScreen({ navigation }) {
           if (!isSelectionMode) setIsSelectionMode(true);
           toggleSelection(item.id);
         }}
-        onPress={() => {
+        onPress={async () => {
           if (isSelectionMode) {
             toggleSelection(item.id);
           } else {
             if (isUnread && myProfile?.id) {
-              remove(ref(database, `users/${myProfile.id}/recentChats/${item.id}/unread`));
+              // Update unread status in Supabase
+              await supabase
+                .from('recent_chats')
+                .update({ unread: false })
+                .eq('user_id', myProfile.id)
+                .eq('contact_id', item.id);
             }
             navigation.navigate('ChatRoom', { contact: item });
           }

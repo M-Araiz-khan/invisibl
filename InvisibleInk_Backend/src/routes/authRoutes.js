@@ -3,7 +3,7 @@ const router = express.Router();
 
 // Controllers & Middleware
 const authController = require('../controllers/authController');
-const requireAuth = require('../middleware/requireAuth'); 
+const requireAuth = require('../middlewares/requireAuth'); 
 
 /**
  * Async wrapper to catch unhandled promise rejections.
@@ -17,7 +17,7 @@ const asyncHandler = (fn) => (req, res, next) =>
 // ==========================================
 
 // Route:   POST /verify
-// Desc:    Verifies Firebase token and returns user data
+// Desc:    Verifies Supabase token and returns user data
 // Access:  Private (Requires Bearer Token)
 router.post('/verify', requireAuth, asyncHandler(authController.verifyLogin));
 

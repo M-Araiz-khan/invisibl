@@ -2,22 +2,24 @@ const logger = require('../utils/logger');
 
 exports.verifyLogin = async (req, res) => {
   try {
-    // Middleware should place the decoded token in req.user
+    // Middleware ab Supabase ka token verify karke req.user mein data bhejay ga
     const user = req.user;
 
     if (!user) {
       return res.status(401).json({ error: 'Unauthorized: No user data found' });
     }
 
-    logger.info(`User login verified for UID: ${user.uid}`);
+    // Supabase mein 'uid' ki jagah 'id' use hota hai
+    logger.info(`User login verified for ID: ${user.id}`);
 
     res.status(200).json({
       success: true,
-      message: 'Access Granted',
+      message: 'Access Granted via Supabase',
       user: {
-        uid: user.uid || '',
+        id: user.id || '', // 'uid' ko 'id' mein change kar diya
         email: user.email || '',
-        name: user.name || 'Anonymous Agent',
+        // Supabase mein extra info aksar 'user_metadata' object mein hoti hai
+        name: user.user_metadata?.name || user.name || 'Anonymous Agent',
       },
     });
   } catch (error) {

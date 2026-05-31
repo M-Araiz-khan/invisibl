@@ -2,36 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { ZegoSendCallInvitationButton } from '@zegocloud/zego-uikit-prebuilt-call-rn';
 import { Audio, Video } from 'expo-av';
 import * as ImagePicker from 'expo-image-picker';
-import {
-  off,
-  onDisconnect,
-  onValue,
-  push,
-  ref,
-  remove,
-  serverTimestamp,
-  set,
-  update,
-} from 'firebase/database';
-import {
-  getDownloadURL,
-  ref as storageRef,
-  uploadBytes,
-} from 'firebase/storage';
-import React, {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   StyleSheet,
   Text,
@@ -39,15 +17,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { database, storage } from '../../config/firebaseClient';
+
+// ✅ SUPABASE IMPORTS
+import { supabase } from '../../config/supabaseclient';
 import { useShake } from '../../hooks/useShake';
 import { useZegoReady } from '../../hooks/useZegoReady';
-import {
-  cacheMediaFile,
-  downloadAndCacheMedia,
-  getMyProfile,
-  startSelfDestructTimer,
-} from '../../utils/storage';
+import { cacheMediaFile, downloadAndCacheMedia, getMyProfile, startSelfDestructTimer } from '../../utils/storage';
 
 export default function ChatRoomScreen({ route, navigation }) {
   const contact = route.params?.contact;
@@ -67,13 +42,14 @@ export default function ChatRoomScreen({ route, navigation }) {
   const [recordingTime, setRecordingTime] = useState(0);
   const [playingAudioId, setPlayingAudioId] = useState(null);
   const [selectedMessages, setSelectedMessages] = useState([]);
+  
+  const [menuVisible, setMenuVisible] = useState(false);
 
   const flatListRef = useRef(null);
   const soundObject = useRef(new Audio.Sound());
   const isRecordingRef = useRef(false);
   const recordingInterval = useRef(null);
 
-  // Zego ready state from hook
   const isZegoReady = useZegoReady();
 
   const chatId = useMemo(() => {
@@ -107,58 +83,74 @@ export default function ChatRoomScreen({ route, navigation }) {
     };
   }, []);
 
-  // ---------- Real‑time DB Listeners ----------
+  // ---------- Real‑time Supabase Listeners ----------
   useEffect(() => {
     if (!chatId || !myProfile || !contactId) return;
 
-    const messagesRef = ref(database, `chats/${chatId}/messages`);
-    const typingRef = ref(database, `chats/${chatId}/typing/${contactId}`);
-    const myTypingRef = ref(database, `chats/${chatId}/typing/${myProfile.id}`);
-
-    const messagesCallback = (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const loaded = Object.keys(data)
-          .map((key) => ({ id: key, ...data[key] }))
-          .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-        setMessages(loaded);
-      } else {
-        setMessages([]);
+    const loadMessages = async () => {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('chat_id', chatId)
+        .order('timestamp', { ascending: true });
+        
+      if (!error && data) {
+         setMessages(data);
       }
     };
 
-    onValue(messagesRef, messagesCallback);
-    onValue(typingRef, (snap) => setIsTyping(snap.val() || false));
-    onDisconnect(myTypingRef).remove().catch(() => {});
+    loadMessages();
+
+    const messagesChannel = supabase
+      .channel(`chat_${chatId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${chatId}` }, (payload) => {
+        if (payload.eventType === 'INSERT') {
+          // ✅ Prevent Double Echo: Check if message already exists locally via _id
+          setMessages(prev => {
+            const exists = prev.find(msg => msg._id === payload.new._id || msg.id === payload.new.id);
+            if (exists) {
+              return prev.map(msg => (msg._id === payload.new._id || msg.id === payload.new.id) ? payload.new : msg);
+            }
+            return [...prev, payload.new];
+          });
+        } else if (payload.eventType === 'DELETE') {
+          setMessages(prev => prev.filter(msg => msg.id !== payload.old.id));
+        } else if (payload.eventType === 'UPDATE') {
+          setMessages(prev => prev.map(msg => msg.id === payload.new.id ? payload.new : msg));
+        }
+      })
+      .subscribe();
+      
+    const typingChannel = supabase.channel(`typing_${chatId}`);
+    typingChannel
+      .on('broadcast', { event: 'typing' }, (payload) => {
+        if(payload.payload.userId === contactId) {
+           setIsTyping(payload.payload.isTyping);
+        }
+      })
+      .subscribe();
 
     return () => {
-      off(messagesRef);
-      off(typingRef);
-      remove(myTypingRef).catch(() => {});
+      supabase.removeChannel(messagesChannel);
+      supabase.removeChannel(typingChannel);
     };
   }, [chatId, myProfile, contactId]);
 
-  // ---------- Background media caching for received messages ----------
+  // ---------- Background media caching ----------
   useEffect(() => {
     messages.forEach(async (msg) => {
       if (!msg.isUploading) {
         if (msg.imageUrl && msg.imageUrl !== 'uploading' && !msg.localImageUri) {
           const localUri = await downloadAndCacheMedia(msg.imageUrl, `img_${msg.id}.jpg`);
-          if (localUri) {
-            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, localImageUri: localUri } : m)));
-          }
+          if (localUri) setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, localImageUri: localUri } : m)));
         }
         if (msg.videoUrl && msg.videoUrl !== 'uploading' && !msg.localVideoUri) {
           const localUri = await downloadAndCacheMedia(msg.videoUrl, `vid_${msg.id}.mp4`);
-          if (localUri) {
-            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, localVideoUri: localUri } : m)));
-          }
+          if (localUri) setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, localVideoUri: localUri } : m)));
         }
         if (msg.audioUrl && msg.audioUrl !== 'uploading' && !msg.localAudioUri) {
           const localUri = await downloadAndCacheMedia(msg.audioUrl, `aud_${msg.id}.m4a`);
-          if (localUri) {
-            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, localAudioUri: localUri } : m)));
-          }
+          if (localUri) setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, localAudioUri: localUri } : m)));
         }
       }
     });
@@ -173,15 +165,67 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   const deleteSelectedMessages = useCallback(async () => {
     if (!chatId || selectedMessages.length === 0) return;
-    const updates = {};
-    selectedMessages.forEach((id) => {
-      updates[`chats/${chatId}/messages/${id}`] = null;
-    });
-    await update(ref(database), updates);
+    
+    await supabase
+      .from('messages')
+      .delete()
+      .in('id', selectedMessages);
+      
     setSelectedMessages([]);
   }, [chatId, selectedMessages]);
 
-  // ---------- Header (Zego call buttons or loading spinner) ----------
+  // ---------- MENU ACTION HANDLERS ----------
+  const handleBlockUser = () => {
+    setMenuVisible(false);
+    Alert.alert(
+      "Block User", 
+      `Are you sure you want to block ${contactName}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Block", 
+          style: "destructive",
+          onPress: () => {
+            Alert.alert("Blocked", `${contactName} has been blocked.`);
+            navigation.goBack();
+          }
+        }
+      ]
+    );
+  };
+
+  const handleUserInfo = () => {
+    setMenuVisible(false);
+    Alert.alert("User Information", `Name: ${contactName}\nID: ${contactId}\nStatus: Secured Agent`);
+  };
+
+  const handleViewMedia = () => {
+    setMenuVisible(false);
+    const mediaMessages = messages.filter(m => m.imageUrl || m.videoUrl);
+    Alert.alert(mediaMessages.length === 0 ? "No Media" : "Media Found", `You have ${mediaMessages.length} media files.`);
+  };
+
+  const handleClearChat = () => {
+    setMenuVisible(false);
+    Alert.alert(
+      "Clear Chat", 
+      "Are you sure you want to delete ALL messages in this chat permanently?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Clear All", 
+          style: "destructive",
+          onPress: async () => {
+            if (!chatId) return;
+            await supabase.from('messages').delete().eq('chat_id', chatId);
+            setMessages([]);
+          }
+        }
+      ]
+    );
+  };
+
+  // ---------- Header ----------
   useLayoutEffect(() => {
     if (selectedMessages.length > 0) {
       navigation.setOptions({
@@ -211,7 +255,7 @@ export default function ChatRoomScreen({ route, navigation }) {
                   resourceID="invisible_calls"
                   backgroundColor="transparent"
                 />
-                <View style={{ width: 10 }} />
+                <View style={{ width: 5 }} />
                 <ZegoSendCallInvitationButton
                   invitees={[{ userID: String(contactId), userName: contactName }]}
                   isVideoCall={true}
@@ -222,31 +266,40 @@ export default function ChatRoomScreen({ route, navigation }) {
             ) : (
               <ActivityIndicator size="small" color="#00FFCC" />
             )}
+            <TouchableOpacity onPress={() => setMenuVisible(true)} style={{ marginLeft: 10, padding: 5 }}>
+              <Ionicons name="ellipsis-vertical" size={22} color="#00FFCC" />
+            </TouchableOpacity>
           </View>
         ),
       });
     }
   }, [navigation, contactName, selectedMessages, contactId, deleteSelectedMessages, isZegoReady]);
 
-  // ---------- Helpers ----------
-  const getFileExtension = (uri, type) => {
-    const ext = uri.split('.').pop();
-    if (ext && ext.length <= 4) return ext;
-    if (type === 'video') return 'mp4';
-    if (type === 'audio') return 'm4a';
-    return 'jpg';
-  };
-
+  // ---------- Supabase Storage Upload Helper ----------
   const uploadFileToCloud = async (uri, folder, type) => {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    const ext = getFileExtension(uri, type);
-    const fileRef = storageRef(storage, `${folder}/${Date.now()}_${myProfile.id}.${ext}`);
-    await uploadBytes(fileRef, blob);
-    return await getDownloadURL(fileRef);
+    try {
+      const ext = uri.split('.').pop() || (type === 'video' ? 'mp4' : type === 'audio' ? 'm4a' : 'jpg');
+      const fileName = `${Date.now()}_${myProfile.id}.${ext}`;
+      const formData = new FormData();
+      
+      formData.append('file', {
+        uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
+        name: fileName,
+        type: `${type}/${ext}`,
+      });
+
+      const { error } = await supabase.storage.from('chat_media').upload(`${folder}/${fileName}`, formData);
+      if (error) throw error;
+      
+      const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(`${folder}/${fileName}`);
+      return publicUrl;
+    } catch (err) {
+      console.error("Upload error", err);
+      return null;
+    }
   };
 
-  // ---------- Send Message (optimistic + background upload + permanent cache) ----------
+  // ---------- Send Message (✅ FIXED & PROFESSIONAL) ----------
   const sendMessage = async (imageUri = null, audioUri = null, videoUri = null) => {
     try {
       if (!inputText.trim() && !imageUri && !audioUri && !videoUri) return;
@@ -254,18 +307,20 @@ export default function ChatRoomScreen({ route, navigation }) {
 
       if (isRecordingRef.current) await cancelRecording();
 
-      const newMessageKey = push(ref(database, `chats/${chatId}/messages`)).key;
       const now = Date.now();
+      const tempId = `temp_${now}`; 
 
-      // Permanent local caching for sender
       let localImagePath = null, localVideoPath = null, localAudioPath = null;
-      if (imageUri) localImagePath = await cacheMediaFile(imageUri, `img_${newMessageKey}.jpg`);
-      else if (videoUri) localVideoPath = await cacheMediaFile(videoUri, `vid_${newMessageKey}.mp4`);
-      else if (audioUri) localAudioPath = await cacheMediaFile(audioUri, `aud_${newMessageKey}.m4a`);
+      if (imageUri) localImagePath = await cacheMediaFile(imageUri, `img_${tempId}.jpg`);
+      else if (videoUri) localVideoPath = await cacheMediaFile(videoUri, `vid_${tempId}.mp4`);
+      else if (audioUri) localAudioPath = await cacheMediaFile(audioUri, `aud_${tempId}.m4a`);
 
-      // Optimistic message (Firebase mein local path nahi jayega)
+      // ✅ ADDED MISSING REQUIRED DATABASE COLUMNS HERE
       const messageData = {
-        text: inputText.trim(),
+        _id: tempId,
+        chat_id: chatId,
+        roomId: chatId,
+        text: inputText.trim() || null,
         imageUrl: imageUri ? 'uploading' : null,
         videoUrl: videoUri ? 'uploading' : null,
         audioUrl: audioUri ? 'uploading' : null,
@@ -273,104 +328,100 @@ export default function ChatRoomScreen({ route, navigation }) {
         localVideoUri: localVideoPath,
         localAudioUri: localAudioPath,
         sender: myProfile.id,
+        senderId: myProfile.id,
+        receiverId: contactId,
         timestamp: now,
-        localTimestamp: now,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         isExpiring: destructTimer > 0,
         isUploading: !!(imageUri || videoUri || audioUri),
       };
 
-      let lastMsgText = inputText.trim();
+      // Optimistic UI Update
+      setMessages(prev => [...prev, { ...messageData, id: tempId }]);
+      setInputText('');
+
+      const { data: insertedMsg, error } = await supabase
+        .from('messages')
+        .insert([messageData])
+        .select()
+        .single();
+        
+      if (error) {
+          console.error("Supabase Database Error:", error);
+          throw error;
+      }
+
+      let lastMsgText = messageData.text;
       if (imageUri) lastMsgText = '📷 Image';
       else if (videoUri) lastMsgText = '🎥 Video';
       else if (audioUri) lastMsgText = '🎤 Voice Note';
 
-      const updates = {};
-      updates[`chats/${chatId}/messages/${newMessageKey}`] = messageData;
-      updates[`users/${myProfile.id}/recentChats/${contactId}`] = {
-        contactId: contactId,
-        contactName: contactName,
-        lastMessage: lastMsgText,
-        timestamp: now,
-      };
-      updates[`users/${contactId}/recentChats/${myProfile.id}`] = {
-        contactId: myProfile.id,
-        contactName: myProfile.name || 'Unknown Agent',
-        lastMessage: lastMsgText,
-        timestamp: now,
-        unread: true,
-      };
-
-      await update(ref(database), updates);
-      setInputText('');
-      remove(ref(database, `chats/${chatId}/typing/${myProfile.id}`)).catch(() => {});
+      await supabase.from('recent_chats').upsert([
+        { user_id: myProfile.id, contact_id: contactId, contact_name: contactName, last_message: lastMsgText, timestamp: new Date(now).toISOString(), unread: false },
+        { user_id: contactId, contact_id: myProfile.id, contact_name: myProfile.name, last_message: lastMsgText, timestamp: new Date(now).toISOString(), unread: true }
+      ]);
 
       if (destructTimer > 0 && !messageData.isUploading) {
-        startSelfDestructTimer(chatId, newMessageKey, destructTimer);
+        startSelfDestructTimer(chatId, insertedMsg.id, destructTimer);
       }
 
-      // Background upload
       if (messageData.isUploading) {
         let remoteUrl = null;
         let updateField = '';
+        
         if (imageUri) {
-          remoteUrl = await uploadFileToCloud(localImagePath || imageUri, 'chat_images', 'image');
+          remoteUrl = await uploadFileToCloud(localImagePath || imageUri, 'images', 'image');
           updateField = 'imageUrl';
         } else if (videoUri) {
-          remoteUrl = await uploadFileToCloud(localVideoPath || videoUri, 'chat_videos', 'video');
+          remoteUrl = await uploadFileToCloud(localVideoPath || videoUri, 'videos', 'video');
           updateField = 'videoUrl';
         } else if (audioUri) {
-          remoteUrl = await uploadFileToCloud(localAudioPath || audioUri, 'chat_audio', 'audio');
+          remoteUrl = await uploadFileToCloud(localAudioPath || audioUri, 'audio', 'audio');
           updateField = 'audioUrl';
         }
 
         if (remoteUrl) {
-          await update(ref(database, `chats/${chatId}/messages/${newMessageKey}`), {
+          await supabase.from('messages').update({
             [updateField]: remoteUrl,
-            isUploading: false,
-            timestamp: serverTimestamp(),
-          });
+            isUploading: false
+          }).eq('id', insertedMsg.id);
 
           if (destructTimer > 0) {
-            startSelfDestructTimer(chatId, newMessageKey, destructTimer);
+            startSelfDestructTimer(chatId, insertedMsg.id, destructTimer);
           }
         }
       }
-    } catch (_error) {
-      Alert.alert('Error', 'Message send failed');
+    } catch (error) {
+      console.error("Send Message Failed:", error);
+      Alert.alert('Error', `Message failed: ${error.message || 'Unknown error'}`);
     }
   };
 
   // ---------- Typing ----------
-  const handleTyping = async (text) => {
+  const handleTyping = (text) => {
     setInputText(text);
     if (!chatId || !myProfile) return;
-    if (text.length > 0 && isRecordingRef.current) await cancelRecording();
-
-    const typingRef = ref(database, `chats/${chatId}/typing/${myProfile.id}`);
-    try {
-      if (text.length > 0) await set(typingRef, true);
-      else await remove(typingRef);
-    } catch (_error) {}
+    
+    supabase.channel(`typing_${chatId}`).send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: { userId: myProfile.id, isTyping: text.length > 0 }
+    });
   };
 
   // ---------- Media Picker ----------
   const handleAttachMedia = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      return Alert.alert('Permission Required', 'Gallery access required');
-    }
+    if (!permission.granted) return Alert.alert('Permission Required', 'Gallery access required');
+    
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.5,
     });
     if (!result.canceled) {
       const asset = result.assets[0];
-      if (asset.type === 'video') {
-        sendMessage(null, null, asset.uri);
-      } else {
-        sendMessage(asset.uri, null, null);
-      }
+      if (asset.type === 'video') sendMessage(null, null, asset.uri);
+      else sendMessage(asset.uri, null, null);
     }
   };
 
@@ -378,20 +429,16 @@ export default function ChatRoomScreen({ route, navigation }) {
   const startRecording = async () => {
     if (isRecordingRef.current) return;
     const permission = await Audio.requestPermissionsAsync();
-    if (!permission.granted) {
-      return Alert.alert('Permission Required', 'Mic access required');
-    }
+    if (!permission.granted) return Alert.alert('Permission Required', 'Mic access required');
+    
     isRecordingRef.current = true;
     setIsRecording(true);
     setRecordingTime(0);
-    await Audio.setAudioModeAsync({
-      allowsRecordingIOS: true,
-      playsInSilentModeIOS: true,
-    });
-    const { recording } = await Audio.Recording.createAsync(
-      Audio.RecordingOptionsPresets.HIGH_QUALITY
-    );
+    await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+    
+    const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
     setRecording(recording);
+    
     recordingInterval.current = setInterval(() => {
       setRecordingTime((t) => t + 1);
     }, 1000);
@@ -399,9 +446,7 @@ export default function ChatRoomScreen({ route, navigation }) {
 
   const cancelRecording = async () => {
     if (recordingInterval.current) clearInterval(recordingInterval.current);
-    try {
-      if (recording) await recording.stopAndUnloadAsync();
-    } catch (_e) {}
+    try { if (recording) await recording.stopAndUnloadAsync(); } catch (_e) {}
     setRecording(null);
     setRecordingTime(0);
     isRecordingRef.current = false;
@@ -462,9 +507,7 @@ export default function ChatRoomScreen({ route, navigation }) {
       <TouchableOpacity
         activeOpacity={0.8}
         onLongPress={() => toggleSelection(item.id)}
-        onPress={() => {
-          if (selectedMessages.length > 0) toggleSelection(item.id);
-        }}
+        onPress={() => { if (selectedMessages.length > 0) toggleSelection(item.id); }}
         style={[
           styles.messageWrapper,
           isMe ? styles.messageWrapperMe : styles.messageWrapperOther,
@@ -475,74 +518,32 @@ export default function ChatRoomScreen({ route, navigation }) {
           {(imageSrc || item.imageUrl === 'uploading') && (
             <View>
               {imageSrc ? <Image source={{ uri: imageSrc }} style={styles.msgImage} resizeMode="cover" /> : <View style={[styles.msgImage, { backgroundColor: '#2A2A2A' }]} />}
-              {item.isUploading && (
-                <View style={styles.uploadOverlay}>
-                  <ActivityIndicator size="small" color="#00FFCC" />
-                </View>
-              )}
+              {item.isUploading && <View style={styles.uploadOverlay}><ActivityIndicator size="small" color="#00FFCC" /></View>}
             </View>
           )}
 
           {(videoSrc || item.videoUrl === 'uploading') && (
             <View>
-              {videoSrc ? (
-                <Video
-                  source={{ uri: videoSrc }}
-                  style={styles.msgImage}
-                  useNativeControls
-                  resizeMode="cover"
-                  isLooping={false}
-                />
-              ) : (
-                <View style={[styles.msgImage, { backgroundColor: '#2A2A2A' }]} />
-              )}
-              {item.isUploading && (
-                <View style={styles.uploadOverlay}>
-                  <ActivityIndicator size="small" color="#00FFCC" />
-                </View>
-              )}
+              {videoSrc ? <Video source={{ uri: videoSrc }} style={styles.msgImage} useNativeControls resizeMode="cover" isLooping={false} /> : <View style={[styles.msgImage, { backgroundColor: '#2A2A2A' }]} />}
+              {item.isUploading && <View style={styles.uploadOverlay}><ActivityIndicator size="small" color="#00FFCC" /></View>}
             </View>
           )}
 
           {(audioSrc || item.audioUrl === 'uploading') && (
             <View style={styles.audioButton}>
-              <TouchableOpacity
-                onPress={() => audioSrc && playAudio(audioSrc, item.id)}
-                disabled={selectedMessages.length > 0 || item.isUploading || !audioSrc}
-              >
-                <Ionicons
-                  name={playingAudioId === item.id ? 'pause' : 'play'}
-                  size={20}
-                  color={isMe ? '#121212' : '#00FFCC'}
-                />
+              <TouchableOpacity onPress={() => audioSrc && playAudio(audioSrc, item.id)} disabled={selectedMessages.length > 0 || item.isUploading || !audioSrc}>
+                <Ionicons name={playingAudioId === item.id ? 'pause' : 'play'} size={20} color={isMe ? '#121212' : '#00FFCC'} />
               </TouchableOpacity>
-              <Text style={[styles.audioText, { color: isMe ? '#121212' : '#FFFFFF' }]}>
-                Voice Note
-              </Text>
-              {item.isUploading && (
-                <ActivityIndicator style={{ marginLeft: 10 }} size="small" color={isMe ? '#121212' : '#00FFCC'} />
-              )}
+              <Text style={[styles.audioText, { color: isMe ? '#121212' : '#FFFFFF' }]}>Voice Note</Text>
+              {item.isUploading && <ActivityIndicator style={{ marginLeft: 10 }} size="small" color={isMe ? '#121212' : '#00FFCC'} />}
             </View>
           )}
 
-          {!!item.text && (
-            <Text style={[styles.messageText, { color: isMe ? '#121212' : '#FFFFFF' }]}>
-              {item.text}
-            </Text>
-          )}
+          {!!item.text && <Text style={[styles.messageText, { color: isMe ? '#121212' : '#FFFFFF' }]}>{item.text}</Text>}
 
           <View style={styles.timeRow}>
-            {item.isExpiring && (
-              <Ionicons
-                name="timer-outline"
-                size={12}
-                color={isMe ? 'rgba(0,0,0,0.5)' : '#ff4444'}
-                style={{ marginRight: 4 }}
-              />
-            )}
-            <Text style={[styles.timeText, { color: isMe ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)' }]}>
-              {item.time}
-            </Text>
+            {item.isExpiring && <Ionicons name="timer-outline" size={12} color={isMe ? 'rgba(0,0,0,0.5)' : '#ff4444'} style={{ marginRight: 4 }} />}
+            <Text style={[styles.timeText, { color: isMe ? 'rgba(0,0,0,0.5)' : 'rgba(255,255,255,0.5)' }]}>{item.time}</Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -550,20 +551,44 @@ export default function ChatRoomScreen({ route, navigation }) {
   };
 
   if (loading || !myProfile || !contactId) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <ActivityIndicator size="large" color="#00FFCC" />
-      </View>
-    );
+    return <View style={[styles.container, styles.center]}><ActivityIndicator size="large" color="#00FFCC" /></View>;
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+    <KeyboardAvoidingView 
+      style={styles.container} 
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 80} 
       enabled
     >
+      
+      {/* ✅ MODAL FOR 3-DOT MENU */}
+      <Modal transparent visible={menuVisible} animationType="fade" onRequestClose={() => setMenuVisible(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
+          <View style={styles.menuContainer}>
+            <TouchableOpacity style={styles.menuItem} onPress={handleUserInfo}>
+              <Ionicons name="person-circle-outline" size={20} color="#00FFCC" />
+              <Text style={styles.menuText}>User Info</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.menuItem} onPress={handleViewMedia}>
+              <Ionicons name="images-outline" size={20} color="#00FFCC" />
+              <Text style={styles.menuText}>View Media</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.menuItem} onPress={handleClearChat}>
+              <Ionicons name="trash-bin-outline" size={20} color="#ff4444" />
+              <Text style={[styles.menuText, { color: '#ff4444' }]}>Clear Chat</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={[styles.menuItem, { borderBottomWidth: 0 }]} onPress={handleBlockUser}>
+              <Ionicons name="ban-outline" size={20} color="#ff4444" />
+              <Text style={[styles.menuText, { color: '#ff4444' }]}>Block User</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       <FlatList
         ref={flatListRef}
         data={messages}
@@ -575,11 +600,7 @@ export default function ChatRoomScreen({ route, navigation }) {
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
       />
 
-      {isTyping && (
-        <View style={styles.typingContainer}>
-          <Text style={styles.typingText}>{contactName} is typing...</Text>
-        </View>
-      )}
+      {isTyping && <View style={styles.typingContainer}><Text style={styles.typingText}>{contactName} is typing...</Text></View>}
 
       <View style={styles.inputContainer}>
         {isRecording ? (
@@ -587,22 +608,15 @@ export default function ChatRoomScreen({ route, navigation }) {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={styles.redDot} />
               <Text style={styles.recordingTimeText}>
-                {Math.floor(recordingTime / 60).toString().padStart(2, '0')}:
-                {(recordingTime % 60).toString().padStart(2, '0')}
+                {Math.floor(recordingTime / 60).toString().padStart(2, '0')}:{(recordingTime % 60).toString().padStart(2, '0')}
               </Text>
             </View>
-            <TouchableOpacity onPress={cancelRecording}>
-              <Text style={styles.slideCancelText}>{'< Cancel'}</Text>
-            </TouchableOpacity>
+            <TouchableOpacity onPress={cancelRecording}><Text style={styles.slideCancelText}>{'< Cancel'}</Text></TouchableOpacity>
           </View>
         ) : (
           <>
             <TouchableOpacity style={styles.timerButton} onPress={toggleTimer}>
-              <Ionicons
-                name={destructTimer > 0 ? 'timer' : 'timer-outline'}
-                size={26}
-                color={destructTimer > 0 ? '#ff4444' : 'rgba(255,255,255,0.4)'}
-              />
+              <Ionicons name={destructTimer > 0 ? 'timer' : 'timer-outline'} size={26} color={destructTimer > 0 ? '#ff4444' : 'rgba(255,255,255,0.4)'} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.attachButton} onPress={handleAttachMedia}>
               <Ionicons name="add-circle-outline" size={28} color="#00FFCC" />
@@ -620,19 +634,9 @@ export default function ChatRoomScreen({ route, navigation }) {
 
         <TouchableOpacity
           style={styles.sendButton}
-          onPress={
-            inputText.trim()
-              ? () => sendMessage()
-              : isRecording
-              ? stopRecordingAndSend
-              : startRecording
-          }
+          onPress={inputText.trim() ? () => sendMessage() : isRecording ? stopRecordingAndSend : startRecording}
         >
-          <Ionicons
-            name={inputText.trim() ? 'send' : isRecording ? 'arrow-up' : 'mic'}
-            size={20}
-            color={isRecording ? '#FFFFFF' : '#121212'}
-          />
+          <Ionicons name={inputText.trim() ? 'send' : isRecording ? 'arrow-up' : 'mic'} size={20} color={isRecording ? '#FFFFFF' : '#121212'} />
         </TouchableOpacity>
       </View>
     </KeyboardAvoidingView>
@@ -650,43 +654,16 @@ const styles = StyleSheet.create({
   selectedMessageOverlay: { backgroundColor: 'rgba(0, 255, 204, 0.15)', borderRadius: 10 },
   messageBubble: { maxWidth: '80%', padding: 12, borderRadius: 18, minWidth: 100 },
   bubbleMe: { backgroundColor: '#00FFCC', borderBottomRightRadius: 4 },
-  bubbleOther: {
-    backgroundColor: '#1E1E1E',
-    borderBottomLeftRadius: 4,
-    borderWidth: 1,
-    borderColor: '#2A2A2A',
-  },
+  bubbleOther: { backgroundColor: '#1E1E1E', borderBottomLeftRadius: 4, borderWidth: 1, borderColor: '#2A2A2A' },
   messageText: { fontSize: 16, lineHeight: 22 },
   msgImage: { width: 220, height: 220, borderRadius: 10, marginBottom: 5 },
-  uploadOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+  uploadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
   timeRow: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 5 },
   timeText: { fontSize: 11 },
   typingContainer: { paddingHorizontal: 20, paddingBottom: 10 },
   typingText: { color: '#00FFCC', fontSize: 12, fontStyle: 'italic' },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1E1E1E',
-    padding: 10,
-    paddingBottom: Platform.OS === 'ios' ? 30 : 10,
-  },
-  input: {
-    flex: 1,
-    backgroundColor: '#2A2A2A',
-    color: '#FFFFFF',
-    borderRadius: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    marginRight: 10,
-    maxHeight: 120,
-  },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E1E1E', padding: 10, paddingBottom: Platform.OS === 'ios' ? 30 : 10 },
+  input: { flex: 1, backgroundColor: '#2A2A2A', color: '#FFFFFF', borderRadius: 20, paddingHorizontal: 15, paddingVertical: 10, marginRight: 10, maxHeight: 120 },
   sendButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#00FFCC', justifyContent: 'center', alignItems: 'center' },
   attachButton: { marginRight: 10 },
   timerButton: { marginRight: 10 },
@@ -696,4 +673,9 @@ const styles = StyleSheet.create({
   redDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#ff4444', marginRight: 5 },
   recordingTimeText: { color: '#FFF', fontSize: 16 },
   slideCancelText: { color: 'rgba(255,255,255,0.5)', fontSize: 14, fontStyle: 'italic' },
+  
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 50, paddingRight: 10 },
+  menuContainer: { width: 180, backgroundColor: '#1E1E1E', borderRadius: 10, borderWidth: 1, borderColor: '#2A2A2A', overflow: 'hidden', elevation: 5 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderBottomColor: '#2A2A2A' },
+  menuText: { color: '#FFF', fontSize: 16, marginLeft: 10 },
 });

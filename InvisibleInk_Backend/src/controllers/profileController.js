@@ -1,82 +1,55 @@
-const { db, auth } = require('../config/firebaseAdmin');
+const supabase = require('../config/supabaseclient'); // Sahi import (chota 'c')
 const logger = require('../utils/logger');
 
-// --------------------------------------------------------------
-// UPDATE PROFILE
-// --------------------------------------------------------------
-exports.updateProfile = async (req, res) => {
+// 1. Profile Fetch Karne Ka Function
+exports.getProfile = async (req, res) => {
   try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ error: 'Unauthorized' });
+    // req.user humein requireAuth middleware se milta hai
+    const userId = req.user.id; 
 
-    const { displayName, phoneNumber, bio } = req.body;
+    const { data: profile, error } = await supabase
+      .from('profiles') // Supabase mein aapki table ka naam 'profiles' hona chahiye
+      .select('*')
+      .eq('id', userId)
+      .single();
 
-    // 1. Validate displayName
-    if (!displayName || displayName.trim().length < 2) {
-      return res.status(400).json({ error: 'Valid Display Name is required' });
+    if (error) {
+      if (error.code === 'PGRST116') { // Row not found error
+         return res.status(404).json({ error: 'Profile abhi tak bani nahi hai' });
+      }
+      throw error;
     }
 
-    const trimmedName = displayName.trim();
-    const safePhone = phoneNumber ? phoneNumber.trim() : '';
-    const safeBio = bio ? bio.trim() : 'Available on Invisible Ink';
-
-    // 2. Update Firebase Auth (Safe Mode)
-    // Firebase Auth requires strict E.164 format (+92...). 
-    // Isko alag try-catch mein rakha hai taake invalid phone format ki wajah se RTDB update block na ho.
-    const authUpdateFields = { displayName: trimmedName };
-    if (safePhone) authUpdateFields.phoneNumber = safePhone;
-
-    try {
-      await auth.updateUser(uid, authUpdateFields);
-    } catch (authError) {
-      logger.warn(`Firebase Auth update skipped for UID: ${uid} (Likely invalid phone format)`, {
-        message: authError.message
-      });
-      // Code won't crash here, it will continue to update the Database!
-    }
-
-    // 3. Update Realtime Database profile
-    const userRef = db.ref(`users/${uid}/profile`);
-    await userRef.update({
-      displayName: trimmedName,
-      phoneNumber: safePhone, // DB accepts any string, so it's safe here
-      bio: safeBio,
-      updatedAt: Date.now(), // FIXED: Replaced db.ServerValue with Date.now() for Node.js safety
-    });
-
-    logger.info(`Profile updated successfully for UID: ${uid}`);
-    return res.status(200).json({ 
-      success: true, 
-      message: 'Profile updated successfully!' 
-    });
-
+    res.status(200).json({ success: true, profile });
   } catch (error) {
-    logger.error(`Critical error updating profile for UID: ${req.user?.uid}`, error);
-    return res.status(500).json({ error: 'Could not update profile' });
+    logger.error('Profile lane mein masla:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 };
 
-// --------------------------------------------------------------
-// GET PROFILE
-// --------------------------------------------------------------
-exports.getProfile = async (req, res) => {
+// 2. Profile Update/Save Karne Ka Function
+exports.updateProfile = async (req, res) => {
   try {
-    const uid = req.user?.uid;
-    if (!uid) return res.status(401).json({ error: 'Unauthorized' });
+    const userId = req.user.id;
+    const { name, phone, bio } = req.body;
 
-    const snapshot = await db.ref(`users/${uid}/profile`).once('value');
-    
-    const profile = snapshot.exists()
-      ? snapshot.val()
-      : {
-          displayName: 'New Agent',
-          bio: 'Available on Invisible Ink',
-          phoneNumber: '',
-        };
+    const { data: updatedProfile, error } = await supabase
+      .from('profiles')
+      .update({ 
+        name: name || 'Secret Agent', 
+        phone: phone || '', 
+        bio: bio || 'Available on Invisible Ink'
+      })
+      .eq('id', userId)
+      .select()
+      .single();
 
-    return res.status(200).json(profile);
+    if (error) throw error;
+
+    logger.info(`Profile updated for ID: ${userId}`);
+    res.status(200).json({ success: true, profile: updatedProfile });
   } catch (error) {
-    logger.error(`Error fetching profile for UID: ${req.user?.uid}`, error);
-    return res.status(500).json({ error: 'Could not fetch profile' });
+    logger.error('Profile update karne mein masla:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 };

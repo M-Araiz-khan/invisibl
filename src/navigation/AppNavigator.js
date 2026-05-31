@@ -2,12 +2,20 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import React from 'react';
 
+// ✅ Zego Popup aur Required Call Screens ka Import
+import {
+  ZegoCallInvitationDialog,
+  ZegoUIKitPrebuiltCallInCallScreen,
+  ZegoUIKitPrebuiltCallWaitingScreen
+} from '@zegocloud/zego-uikit-prebuilt-call-rn';
+
 // Screens
 import ForgotPinScreen from '../screens/Auth/ForgotPinScreen';
 import PinScreen from '../screens/Auth/PinScreen';
 import AddContactScreen from '../screens/Chat/AddContactScreen';
 import ChatListScreen from '../screens/Chat/ChatListScreen';
 import ChatRoomScreen from '../screens/Chat/ChatRoomScreen';
+import VideoCallScreen from '../screens/Chat/VideoCallScreen';
 import WeatherScreen from '../screens/Decoy/WeatherScreen';
 import SettingsScreen from '../screens/Profile/SettingsScreen';
 
@@ -29,7 +37,7 @@ export default function AppNavigator() {
           options={{ headerShown: false, animation: 'slide_from_right' }}
         />
 
-        {/* 2. Main Chat List (header managed by screen itself) */}
+        {/* 2. Main Chat List */}
         <Stack.Screen
           name="ChatList"
           component={ChatListScreen}
@@ -74,7 +82,7 @@ export default function AppNavigator() {
           }}
         />
 
-        {/* 6. Decoy Weather Screen (shake‑activated) */}
+        {/* 6. Decoy Weather Screen */}
         <Stack.Screen
           name="WeatherDecoy"
           component={WeatherScreen}
@@ -83,7 +91,31 @@ export default function AppNavigator() {
             animation: 'fade',
           }}
         />
+
+        {/* 7. Aapki Custom Manual Call Screen */}
+        <Stack.Screen
+          name="VideoCallScreen"
+          component={VideoCallScreen}
+          options={{ headerShown: false }}
+        />
+
+        {/* 🚀 8. ZegoCloud ki Built-in Call Screens (YEH ZAROORI THIN) */}
+        <Stack.Screen
+          name="ZegoUIKitPrebuiltCallWaitingScreen"
+          component={ZegoUIKitPrebuiltCallWaitingScreen}
+          options={{ headerShown: false }}
+        />
+        <Stack.Screen
+          name="ZegoUIKitPrebuiltCallInCallScreen"
+          component={ZegoUIKitPrebuiltCallInCallScreen}
+          options={{ headerShown: false }}
+        />
+
       </Stack.Navigator>
+
+      {/* ✅ Zego Popup ko NavigationContainer ke ANDAR rakhna laazmi hai */}
+      <ZegoCallInvitationDialog />
+      
     </NavigationContainer>
   );
 }
